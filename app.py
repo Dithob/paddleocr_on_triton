@@ -1,19 +1,31 @@
-# app.py
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel, Field, ConfigDict
 
-from utils.ocr_service import run_ppocr
+from utils.ocr_service import run_ppocr, startup, shutdown
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 初始化：创建全局 httpx.AsyncClient + Triton client pool
+    await startup()
+    yield
+    # 关闭：释放 httpx 连接池等资源
+    await shutdown()
+
 
 app = FastAPI(
+    lifespan=lifespan,
     title="PP-OCRv5 Triton Service",
     version="1.0.0",
     description="PP-OCRv5 det+rec via Triton. Accepts URL or Base64 for images.",
 )
+
 
 class OCRRequest(BaseModel):
     file: str = Field(..., description="服务器可访问的图像URL 或 图像内容Base64（支持data URL前缀）")
@@ -31,6 +43,7 @@ class OCRRequest(BaseModel):
     textRecScoreThresh: Optional[float] = None
 
     visualize: Optional[bool] = None
+
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
         json_schema_extra={
@@ -49,11 +62,9 @@ def health() -> Dict[str, Any]:
 
 @app.post("/v1/ocr")
 async def ocr(req: OCRRequest) -> Dict[str, Any]:
-    # exclude_none=True：只传用户显式填写的字段
     return await run_ppocr(req.model_dump(exclude_none=True))
 
 
-
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)
-    # uvicorn.run(app, host="127.0.0.1", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=6060)
+    # uvicorn.run(app, host="0.0.0.0", port=8080)

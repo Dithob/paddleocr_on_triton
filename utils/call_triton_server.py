@@ -8,7 +8,7 @@ from tritonclient.utils import InferenceServerException
 
 # DBPostProcess 依赖
 from shapely.geometry import Polygon
-from ocr_tools import decode_image_bytes_to_bgr, sorted_boxes
+from utils.ocr_tools import decode_image_bytes_to_bgr, sorted_boxes
 import pyclipper
 
 
@@ -387,23 +387,38 @@ class PPOCRv5TritonClient:
             })
         return results
 
-    def ocr_bgr(self, img_bgr: np.ndarray, sort_reading_order: bool = True, rec_score_thresh: float = 0.0):
-        boxes, scores = self.infer_det(img_bgr)
+    def ocr_bgr(self, img_bgr, sort_reading_order=True, rec_score_thresh=0.0):
+        boxes, det_scores = self.infer_det(img_bgr)
 
         if sort_reading_order:
-            boxes, scores = sorted_boxes(boxes, scores)
+            boxes, det_scores = sorted_boxes(boxes, det_scores)  # 你已有
 
         crops = [get_rotate_crop_image(img_bgr, box.astype(np.float32)) for box in boxes]
-        rec_res = self.infer_rec(crops)
+        rec_res = self.infer_rec(crops)  # [(text, score), ...]
 
-        results = []
+        rec_texts, rec_scores, rec_polys, rec_boxes = [], [], [], []
         for i, box in enumerate(boxes):
-            text, conf = rec_res[i] if i < len(rec_res) else ("", 0.0)
-            conf = float(conf)
-            if conf < rec_score_thresh:
+            text, score = rec_res[i] if i < len(rec_res) else ("", 0.0)
+            score = float(score)
+            if score < rec_score_thresh:
                 continue
-            results.append({"box": box.tolist(), "text": text, "score": conf})
-        return results
+            rec_texts.append(text)
+            rec_scores.append(score)
+            poly4 = np.array(box).reshape(4, 2).astype(int)
+            rec_polys.append(poly4.tolist())
+            xs, ys = poly4[:, 0], poly4[:, 1]
+            rec_boxes.append([int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())])
+
+        return {
+            "boxes": boxes,  # np.ndarray (N,4,2)
+            "det_scores": det_scores,  # list[float]
+            "rec_texts": rec_texts,
+            "rec_scores": rec_scores,
+            "rec_polys": rec_polys,
+            "rec_boxes": rec_boxes,
+            "textline_orientation_angles": [0] * len(rec_texts),  # 你当前没做该模块，先填0保持结构
+            "angle": 0,  # doc_preprocessor_res angle（没做旋转就填0）
+        }
 
     def ocr_bytes(self, image_bytes: bytes, **kwargs):
         img_bgr = decode_image_bytes_to_bgr(image_bytes)
