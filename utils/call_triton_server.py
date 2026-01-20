@@ -8,6 +8,7 @@ from tritonclient.utils import InferenceServerException
 
 # DBPostProcess 依赖
 from shapely.geometry import Polygon
+from ocr_tools import decode_image_bytes_to_bgr, sorted_boxes
 import pyclipper
 
 
@@ -386,6 +387,27 @@ class PPOCRv5TritonClient:
             })
         return results
 
+    def ocr_bgr(self, img_bgr: np.ndarray, sort_reading_order: bool = True, rec_score_thresh: float = 0.0):
+        boxes, scores = self.infer_det(img_bgr)
+
+        if sort_reading_order:
+            boxes, scores = sorted_boxes(boxes, scores)
+
+        crops = [get_rotate_crop_image(img_bgr, box.astype(np.float32)) for box in boxes]
+        rec_res = self.infer_rec(crops)
+
+        results = []
+        for i, box in enumerate(boxes):
+            text, conf = rec_res[i] if i < len(rec_res) else ("", 0.0)
+            conf = float(conf)
+            if conf < rec_score_thresh:
+                continue
+            results.append({"box": box.tolist(), "text": text, "score": conf})
+        return results
+
+    def ocr_bytes(self, image_bytes: bytes, **kwargs):
+        img_bgr = decode_image_bytes_to_bgr(image_bytes)
+        return self.ocr_bgr(img_bgr, **kwargs)
 
 if __name__ == "__main__":
     # Triton HTTP: http://localhost:6000
